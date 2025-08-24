@@ -31,7 +31,7 @@ import random
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -49,7 +49,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--seed',type=int,default=21) 
 
 parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
-parser.add_argument('--project_name',type=str,default="single_exp_off") 
+parser.add_argument('--project_name',type=str,default="ppo+off") 
 parser.add_argument('--env_name',type=str,default="Ant-v5") 
 parser.add_argument('--max_steps',type=int,default=None) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
@@ -91,7 +91,7 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 jax_rng = jax.random.PRNGKey(args.seed)
 jax.config.update("jax_default_matmul_precision", "highest")
-
+#6d9aeda8022ca922a2ee74ddfe8ea3d0e1f170db
 def train(args):
     
     
@@ -105,7 +105,7 @@ def train(args):
 
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name':f"{args.algo_name}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
