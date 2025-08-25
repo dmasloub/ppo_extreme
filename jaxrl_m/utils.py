@@ -88,3 +88,5 @@ def get_recent(transitions, K):
     sl = slice(max(0, n-K), n)
     return jax.tree.map(lambda x: x[sl], transitions)
 
+def tree_polyak(beta, target, source):
+    return jax.tree.map(lambda t, s: beta * t + (1.0 - beta) * s, target, source)

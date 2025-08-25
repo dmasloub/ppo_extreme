@@ -3,7 +3,7 @@ import flax
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from jaxrl_m.utils import get_recent, logp_from_pre_actions
+from jaxrl_m.utils import get_recent, logp_from_pre_actions, tree_polyak
 import numpy as np
 import optax
 
@@ -55,6 +55,9 @@ class PPOConfig:
     is_cmax: float = 10.0 
     opppo_objective: str = "spo_is"
     replay_horizon: int = 50000
+    use_ema_ref: bool = True 
+    ema_beta: float = 0.995
+    ema_in_w: bool = True
 
 @dataclass
 class TrainingConfig:
@@ -143,6 +146,7 @@ class SACAgent(flax.struct.PyTreeNode):
     critic: TrainState
     actor: TrainState
     old_actor_params: jnp.ndarray
+    ema_actor_params: jnp.ndarray
     temp: TrainState
     old_temp_params : jnp.ndarray
     config: dict = flax_field(pytree_node=False)
@@ -255,21 +259,34 @@ class SACAgent(flax.struct.PyTreeNode):
   
         def actor_loss_fn(actor_params, adv, batch):
             # recompute logs under proposed params:
+            
+            ref_params = jax.lax.cond(
+                agent.config.ppo.use_ema_ref,
+                lambda _: agent.ema_actor_params,
+                lambda _: agent.old_actor_params,
+                operand=None
+            )
+            
             logp_new = logp_from_pre_actions(agent.actor.apply_fn, actor_params,
                                             batch["observations"], batch["pre_actions"],
                                             tanh_squash=agent.config.training.tanh_squash_actions)
-            logp_ref = logp_from_pre_actions(agent.actor.apply_fn, agent.old_actor_params,
+            logp_ref = logp_from_pre_actions(agent.actor.apply_fn, ref_params,
                                             batch["observations"], batch["pre_actions"],
                                             tanh_squash=agent.config.training.tanh_squash_actions)
             logp_mu  = batch["log_probs"]
 
-            r_ref = jnp.exp(logp_new - logp_ref)         # π / π_ref
+            r_ref = jnp.exp(logp_new - logp_ref)         
             masks = batch["masks"]
             entropy_est = - jnp.sum(masks * logp_new) / (jnp.sum(masks) + 1e-8)
 
-            # clipped IS weight: w = clip(π_ref/μ, c̄)
             if agent.config.ppo.use_is_weights:
-                w = jnp.minimum(jnp.exp(logp_ref - logp_mu), agent.config.ppo.is_cmax)
+                if agent.config.ppo.ema_in_w:
+                    logp_ref_w = logp_ref
+                else:
+                    logp_ref_w = logp_from_pre_actions(agent.actor.apply_fn, agent.old_actor_params,
+                                                    batch["observations"], batch["pre_actions"],
+                                                    tanh_squash=agent.config.training.tanh_squash_actions)
+                w = jnp.minimum(jnp.exp(logp_ref_w - logp_mu), agent.config.ppo.is_cmax)
             else:
                 w = 1.0
 
@@ -313,6 +330,8 @@ class SACAgent(flax.struct.PyTreeNode):
                 # Effective sample size for diagnostics
                 w_mu = jnp.exp(logp_mu - logp_mu)  # =1, placeholder if you later add extra weights
                 ess = (w.sum()**2) / (jnp.sum(w**2) + 1e-8)
+                
+                prox_com = 1.0 / (1.0 - agent.config.ppo.ema_beta) - 1.0
 
                 metrics = dict(
                     actor_loss=loss,
@@ -324,6 +343,7 @@ class SACAgent(flax.struct.PyTreeNode):
                     is_w_mean=w.mean(),
                     ess=ess, 
                     entropy=entropy_est,
+                    prox_com=prox_com,
                 )
 
             return loss, metrics
@@ -429,7 +449,9 @@ class SACAgent(flax.struct.PyTreeNode):
         )
         new_temp = agent.temp.apply_gradients(grads=grads)
 
-        agent = agent.replace(rng=new_rng, actor=new_actor, temp=new_temp)
+        new_ema = tree_polyak(agent.config.ppo.ema_beta, agent.ema_actor_params, new_actor.params)
+        agent = agent.replace(rng=new_rng, actor=new_actor, temp=new_temp, ema_actor_params=new_ema)
+
         info = {**actor_info, **temp_info}
         return agent, info
                     
@@ -563,6 +585,7 @@ def create_learner(
         critic=critic,
         actor=actor,
         old_actor_params=actor_params,
+        ema_actor_params=actor_params,
         temp=temp,
         old_temp_params=temp_params,
         config=config,
