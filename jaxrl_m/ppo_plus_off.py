@@ -254,7 +254,6 @@ class SACAgent(flax.struct.PyTreeNode):
       
   
         def actor_loss_fn(actor_params, adv, batch):
-            # recompute logs under proposed params:
             logp_new = logp_from_pre_actions(agent.actor.apply_fn, actor_params,
                                             batch["observations"], batch["pre_actions"],
                                             tanh_squash=agent.config.training.tanh_squash_actions)
@@ -263,11 +262,11 @@ class SACAgent(flax.struct.PyTreeNode):
                                             tanh_squash=agent.config.training.tanh_squash_actions)
             logp_mu  = batch["log_probs"]
 
-            r_ref = jnp.exp(logp_new - logp_ref)         # π / π_ref
+            r_ref = jnp.exp(logp_new - logp_ref)         
             masks = batch["masks"]
             entropy_est = - jnp.sum(masks * logp_new) / (jnp.sum(masks) + 1e-8)
 
-            # clipped IS weight: w = clip(π_ref/μ, c̄)
+            
             if agent.config.ppo.use_is_weights:
                 w = jnp.minimum(jnp.exp(logp_ref - logp_mu), agent.config.ppo.is_cmax)
             else:
@@ -277,8 +276,6 @@ class SACAgent(flax.struct.PyTreeNode):
             outliers = (r_ref > 1.0 + 2.0*eps) | (r_ref < 1.0 - 2.0*eps)
 
             if agent.config.ppo.opppo_objective == "spo_is":
-                # SPO trust-penalty with IS weighting (OP-PPO = replay + clipped IS)
-                # L = E[ w * ( 1_out * A r  - |A|/(2ε) * (r-1)^2 ) ]
                 core = (1.0 - outliers) * masks * adv * r_ref \
                     - (jnp.abs(masks * adv) / (2.0 * eps)) * (r_ref - 1.0)**2
                 loss = - (w * core).mean()
@@ -295,8 +292,7 @@ class SACAgent(flax.struct.PyTreeNode):
                     is_w_max=w.max()
                 )
 
-            else:  # "opppo_clip" per AAAI’23 Off-Policy PPO
-                # r_mu is clipped against bounds scaled by π_ref/μ
+            else:  
                 r_mu  = jnp.exp(logp_new - logp_mu)
                 scale = jnp.exp(logp_ref - logp_mu)
                 low   = scale * (1.0 - eps)
@@ -304,14 +300,13 @@ class SACAgent(flax.struct.PyTreeNode):
 
                 unclipped = r_mu * adv
                 clipped   = jnp.clip(r_mu, low, high) * adv
-                # PPO min with masks. Optional multiply by w as an extra stabilizer.
+            
                 core = jnp.minimum(unclipped, clipped)
                 loss = - (masks * core).mean()
 
                 approx_kl = ((r_mu - 1.0) - (logp_new - logp_mu)).mean()
 
-                # Effective sample size for diagnostics
-                w_mu = jnp.exp(logp_mu - logp_mu)  # =1, placeholder if you later add extra weights
+                w_mu = jnp.exp(logp_mu - logp_mu) 
                 ess = (w.sum()**2) / (jnp.sum(w**2) + 1e-8)
 
                 metrics = dict(
