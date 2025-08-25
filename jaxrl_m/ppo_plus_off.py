@@ -376,9 +376,9 @@ class SACAgent(flax.struct.PyTreeNode):
         
         observations = jnp.concatenate([observations, next_observations[-1][None]], axis=0)
         
-        def evaluate(observations,key):
+        def evaluate(observations,key, params):
             
-            actions, log_p,_ = agent.sample_actions(observations,seed=key)
+            actions, log_p,_ = agent.sample_actions(observations,seed=key, params=params)
             q_all = agent.critic.apply_fn({'params': agent.critic.params}, observations, actions)
             v = jnp.mean(q_all,axis=0)
             
@@ -387,7 +387,8 @@ class SACAgent(flax.struct.PyTreeNode):
    
 
         ### Compute advantage for the fixed states AND actions
-        vs,hs = jax.vmap(evaluate,in_axes=(None,0))(batch["observations"],jax.random.split(curr_key,10))        
+        keys = jax.random.split(curr_key, 10)
+        vs, hs = jax.vmap(lambda k: evaluate(batch["observations"], k, agent.old_actor_params))(keys)     
         tmp_v,tmp_logp = jnp.mean(vs,axis=0),jnp.mean(hs,axis=0)
         q = agent.critic.apply_fn({'params': agent.critic.params}, batch["observations"], batch["actions"]).mean(axis=0)
         
