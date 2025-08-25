@@ -31,7 +31,7 @@ import random
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -48,8 +48,8 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--seed',type=int,default=21) 
 
-parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
-parser.add_argument('--project_name',type=str,default="single_exp_off") 
+parser.add_argument('--algo_name', type=str, default='GePPO', help='the name of the RL algorithm')
+parser.add_argument('--project_name',type=str,default="random_tests") 
 parser.add_argument('--env_name',type=str,default="Ant-v5") 
 parser.add_argument('--max_steps',type=int,default=None) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
@@ -105,7 +105,7 @@ def train(args):
 
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name':f"{args.algo_name}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
@@ -125,6 +125,7 @@ def train(args):
         pre_actions = env.action_space.sample(),
         discounts=1.0,
         log_probs=0.,
+        policy_ids=0, 
     )
 
     replay_buffer = ReplayBuffer.create(example_transition, size=int(args.buffer_size))
@@ -150,7 +151,7 @@ def train(args):
                 
                 logging.debug('policy rollout')
                 if args.on_policy_critic: replay_buffer = replay_buffer.reset()
-                replay_buffer,actor_buffer,policy_return,undisc_policy_return,num_steps = rollout_fn(
+                exploration_rng, replay_buffer,actor_buffer,policy_return,undisc_policy_return,num_steps = rollout_fn(
                                                                         agent,env,exploration_rng,
                                                                         replay_buffer,actor_buffer,eval=False,
                                                                         discount = args.gamma,max_steps=args.policy_steps)
@@ -182,7 +183,9 @@ def train(args):
                     critic_update_info = {}
                 
                 update_info = {**critic_update_info, **actor_update_info}
-                agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),old_temp_params=deepcopy(agent.temp.params))
+                agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),
+                                      old_temp_params=deepcopy(agent.temp.params), 
+                                      policy_version=agent.policy_version + 1)
                 n_grads += args.num_epochs * 2  # epochs for critics + epochs for actor
                 
                 ### Log training info ###
@@ -198,7 +201,7 @@ def train(args):
                 
                 if unlogged_steps >= log_interval:
                     
-                    _,_,policy_return,undisc_policy_return,num_steps = rollout_policy(
+                    exploration_rng,_,_,policy_return,undisc_policy_return,num_steps = rollout_policy(
                                                                     agent,eval_env,exploration_rng,
                                                                     None,None,eval=True,
                                                                     discount = args.gamma,max_rollouts=10)

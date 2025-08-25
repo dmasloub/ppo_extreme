@@ -23,7 +23,7 @@ def rollout_policy(agent,env,exploration_rng,
             log_p,pre_action = 0.,action
         else:
             exploration_rng, key = jax.random.split(exploration_rng)
-            action,log_p,pre_action = agent.sample_actions(obs,seed=exploration_rng)
+            action,log_p,pre_action = agent.sample_actions(obs,seed=key)
             
         action = np.array(action)
         next_obs, reward, done, truncated, info = env.step(action)
@@ -36,7 +36,7 @@ def rollout_policy(agent,env,exploration_rng,
 
         transition = dict(observations=obs,actions=action,
             rewards=reward,masks=mask,truncateds=truncated,next_observations=next_obs,discounts=disc,
-            log_probs=log_p,pre_actions=pre_action)
+            log_probs=log_p,pre_actions=pre_action, policy_ids=agent.policy_version)
 
         if replay_buffer is not None:
             replay_buffer.add_transition(transition)
@@ -60,7 +60,7 @@ def rollout_policy(agent,env,exploration_rng,
     policy_return = np.array(policy_returns).mean()
     undisc_return = np.array(undisc_returns).mean()
     
-    return replay_buffer,actor_buffer,policy_return,undisc_return,n_steps
+    return exploration_rng, replay_buffer,actor_buffer,policy_return,undisc_return,n_steps
 
 
 
@@ -85,7 +85,7 @@ def rollout_policy2(agent,env,exploration_rng,
             log_p,pre_action = 0.,action
         else:
             exploration_rng, key = jax.random.split(exploration_rng)
-            action,log_p,pre_action = agent.sample_actions(obs,seed=exploration_rng)
+            action,log_p,pre_action = agent.sample_actions(obs,seed=key)
             
         action = np.array(action)
         next_obs, reward, done, truncated, info = env.step(action)
@@ -98,7 +98,7 @@ def rollout_policy2(agent,env,exploration_rng,
 
         transition = dict(observations=obs,actions=action,
             rewards=reward,masks=mask,truncateds=truncated,next_observations=next_obs,discounts=disc,
-            log_probs=log_p,pre_actions=pre_action)
+            log_probs=log_p,pre_actions=pre_action, policy_ids=agent.policy_version)
 
         if replay_buffer is not None:
             replay_buffer.add_transition(transition)
@@ -123,7 +123,7 @@ def rollout_policy2(agent,env,exploration_rng,
     undisc_return = np.array(undisc_returns).mean()
     
   
-    return replay_buffer,actor_buffer,policy_return,undisc_return,n_steps
+    return exploration_rng, replay_buffer,actor_buffer,policy_return,undisc_return,n_steps
 
 
 

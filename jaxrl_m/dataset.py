@@ -120,8 +120,8 @@ class ActorReplayBuffer(ReplayBuffer):
         
         
             batch = jax.tree.map(lambda x: x[:self.size], self._dict)
-            batch = jax.tree.map(lambda x: jnp.pad(x, ((0, self.max_size - self.size),) + ((0, 0),) * (x.ndim - 1), mode='constant'), batch)
-        
+            #batch = jax.tree.map(lambda x: jnp.pad(x, ((0, self.max_size - self.size),) + ((0, 0),) * (x.ndim - 1), mode='constant'), batch)
+
             return jax.tree.map(lambda x: jax.device_put(x), batch)
         
         

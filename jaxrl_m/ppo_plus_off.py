@@ -50,6 +50,13 @@ class PPOConfig:
     store_grads: bool = False
     target_entropy: Optional[float] = None
     spo_loss: bool = False
+    use_geppo: bool = True
+    geppo_M: int = 4
+    per_sample_eps: bool = False
+    use_op_ppo: bool = False
+    geppo_filter_last_M: bool = True 
+    weight_by_nu: bool = True
+    
 
 @dataclass
 class TrainingConfig:
@@ -142,6 +149,7 @@ class SACAgent(flax.struct.PyTreeNode):
     old_actor_params: jnp.ndarray
     temp: TrainState
     old_temp_params : jnp.ndarray
+    policy_version: int
     config: dict = flax_field(pytree_node=False)
     
 
@@ -191,33 +199,45 @@ class SACAgent(flax.struct.PyTreeNode):
     @jax.jit
     def update_critics_seq(agent,transitions,num_updates=0 ):
                 
-        n_batches = transitions['observations'].shape[0]//250
+        #n_batches = transitions['observations'].shape[0]//250
 
-        indexes = jnp.arange(transitions['observations'].shape[0])
-        indexes = jax.random.permutation(agent.rng, indexes)
-        batch_size = indexes.shape[0] // n_batches
-        idxs = indexes[:batch_size * n_batches].reshape((n_batches, batch_size))
+        #indexes = jnp.arange(transitions['observations'].shape[0])
+        #indexes = jax.random.permutation(agent.rng, indexes)
+        #batch_size = indexes.shape[0] // n_batches
+        #idxs = indexes[:batch_size * n_batches].reshape((n_batches, batch_size))
 
+        total = int(transitions['observations'].shape[0])
+        n_batches = max(total // 250, 1)
+        rng1, rng2 = jax.random.split(agent.rng)
+        
         ### Make sure we're doing at least 100 updates per epoch
         ### This is to maintain some fairness between the off-policy and on-policy critics
 
         #if n_batches <100 or num_updates is not None:
 
         
-        idxs = jax.random.choice(agent.rng, a=transitions['observations'].shape[0], shape=(n_batches, 250), replace=True)
+        idxs = jax.random.randint(rng2, (n_batches, 250), 0, total)
 
         batches = jax.vmap(lambda i: jax.tree.map(lambda x: x[i], transitions))(idxs)
         agent,batches = jax.lax.fori_loop(0,n_batches,body,(agent,batches))
         
-        return agent
+        return agent.replace(rng=rng1)
     
     @jax.jit
     def update_actor_seq(agent,transitions,num_updates=0 ):
         
         #idxs = jax.random.choice(agent.rng, a=transitions['observations'].shape[0], shape=(num_updates, 250), replace=True)
-        n_batches = transitions['observations'].shape[0]//250
-        idxs = jnp.arange(transitions['observations'].shape[0])
-        idxs = jax.random.permutation(agent.rng, idxs)
+        #n_batches = transitions['observations'].shape[0]//250
+        #idxs = jnp.arange(transitions['observations'].shape[0])
+        #idxs = jax.random.permutation(agent.rng, idxs)
+        #batch_size = idxs.shape[0] // n_batches
+        #idxs = idxs[:batch_size * n_batches].reshape((n_batches, batch_size))
+        
+        total = int(transitions['observations'].shape[0])
+        n_batches = max(total // 250, 1)
+        rng1, perm_key = jax.random.split(agent.rng)
+        idxs = jnp.arange(total)
+        idxs = jax.random.permutation(perm_key, idxs)
         batch_size = idxs.shape[0] // n_batches
         idxs = idxs[:batch_size * n_batches].reshape((n_batches, batch_size))
         
@@ -234,6 +254,7 @@ class SACAgent(flax.struct.PyTreeNode):
             'max_ratio':0.0,
             'min_ratio':0.0,
             'percent_outliers':0.0,
+            'tv_hat': 0.0,
             
         }
         initial_carry = (agent, dummy_info)  # (agent, dummy_info)
@@ -245,116 +266,133 @@ class SACAgent(flax.struct.PyTreeNode):
         
         # aggregate across the time dimension (axis=0)
         agg_info = jax.tree_util.tree_map(lambda x: x.mean(0), all_infos)
-        return final_agent, agg_info
+        return final_agent.replace(rng=rng1), agg_info
 
 
     
     @partial(jax.jit,static_argnames=("num_updates",))
     def update_critics_seq2(agent,transitions,num_updates=2000 ):
                 
-        idxs = jax.random.choice(agent.rng, a=transitions['observations'].shape[0], shape=(num_updates, 250), replace=True)
-
+        #idxs = jax.random.choice(agent.rng, a=transitions['observations'].shape[0], shape=(num_updates, 250), replace=True)
+        total = int(transitions['observations'].shape[0])
+        rng1, rng2 = jax.random.split(agent.rng)
+        idxs = jax.random.randint(rng2, (num_updates, 250), 0, total)
+        
         batches = jax.vmap(lambda i: jax.tree.map(lambda x: x[i], transitions))(idxs)
         agent,batches = jax.lax.fori_loop(0,num_updates,body,(agent,batches))
         
-        return agent
+        return agent.replace(rng=rng1)
 
     
     @jax.jit
     def update_actor(agent, batch: Batch):
     
-    
-      
-  
-        def actor_loss_fn(
-                actor_params,
-                adv,
-                batch,
-                #idx,
-        ):
-        
-        
-            pre_actions = batch["pre_actions"]
-            
-            ############### METHOD 2 ###############
-        
-            dist = agent.actor.apply_fn({'params': actor_params}, batch["observations"])
-            new_pre_log_probs = dist.log_prob(pre_actions)
-            new_logp = new_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
-            
-     
-            
-            dist = agent.actor.apply_fn({'params': agent.old_actor_params}, batch["observations"])            
-            old_pre_log_probs = dist.log_prob(pre_actions)
-            logp = old_pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)            
-            logratio = new_pre_log_probs - old_pre_log_probs
-            
-            
-            
-            
-            
-            
-            #logratio = jnp.clip(logratio, jnp.log(1e-3), jnp.log(1e3))
-            
-            
-            
-            ############### METHOD 1 ###############
-            # dist = agent.actor(batch["observations"],params=actor_params)
-            # pre_actions = batch["pre_actions"]
-            # pre_log_probs = dist.log_prob(pre_actions)
-            
-            # if agent.config["tanh_squash_actions"]:
-            #     new_logp = pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
-            
-            # else : 
-            #     new_logp = pre_log_probs
-            
-            
-            # logratio = new_logp - batch["log_probs"]
-            #######################################
-            
-            ratio = jnp.exp(logratio)
-            
-            
-         
-         
-            # Calculate how much policy is changing
-            approx_kl = ((ratio - 1) - logratio).mean()
+        # --- GePPO: build weights (no boolean slicing) ---
+        M = agent.config.ppo.geppo_M
+        age_full = jnp.maximum(0, agent.policy_version - batch["policy_ids"])
+        keep_mask = jnp.where(agent.config.ppo.use_geppo & agent.config.ppo.geppo_filter_last_M,
+                              (age_full < M).astype(jnp.float32),
+                              jnp.ones_like(batch["masks"]))
+        masks = batch["masks"]
+        if agent.config.ppo.weight_by_nu and agent.config.ppo.use_geppo:
+            age_clip = jnp.clip(age_full, 0, M - 1).astype(jnp.int32)
+            counts = jnp.bincount(age_clip, weights=keep_mask, length=M)  # shape [M]
+            w_per_age = 1.0 / jnp.maximum(1.0, counts)
+            w = w_per_age[age_clip] * keep_mask
+        else:
+            w = keep_mask
+        w = w * masks
+        w = w / (jnp.sum(w) + 1e-8)
 
-            # Policy loss
-            clip_coef = agent.config.ppo.clipping_ratio ##default 0.2 
-            masks = batch["masks"]
-            outliers = (ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)
-            
-            
+        def wmean(x):
+            return jnp.sum(w * x)
+        
+        
+        def actor_loss_fn(actor_params, adv, batch):
+            # behavior (π_{k−i}) logp stored at collection time, after tanh correction
+            logp_b = batch["log_probs"]  # shape [B]
 
-            
-            
+            # current policy π_k = snapshot at start of this epoch
+            dist_cur = agent.actor.apply_fn({'params': agent.old_actor_params}, batch["observations"])
+            cur_pre_logp = dist_cur.log_prob(batch["pre_actions"])
+            cur_logp = cur_pre_logp - jnp.sum(2*(jnp.log(2)-batch["pre_actions"]-jax.nn.softplus(-2*batch["pre_actions"])), axis=-1)
+
+            # new policy π_θ
+            dist_new = agent.actor.apply_fn({'params': actor_params}, batch["observations"])
+            new_pre_logp = dist_new.log_prob(batch["pre_actions"])
+            new_logp = new_pre_logp - jnp.sum(2*(jnp.log(2)-batch["pre_actions"]-jax.nn.softplus(-2*batch["pre_actions"])), axis=-1)
+
+            # Off-policy ratios
+            log_r_b = new_logp - logp_b                  # log(πθ / π_{k−i})
+            log_c   = cur_logp - logp_b                  # log(π_k / π_{k−i})
+
+            r_b = jnp.exp(log_r_b)
+            c   = jnp.exp(log_c)
+
+            # GePPO epsilon
+            if agent.config.ppo.use_geppo:
+                M = agent.config.ppo.geppo_M
+                eps_base = agent.config.ppo.clipping_ratio
+                if agent.config.ppo.per_sample_eps:
+                    # compute i per sample: current policy_version − policy_id, clipped to [0, M-1]
+                    i = jnp.clip(age_full, 0, M - 1)
+                    eps = eps_base / (i + 1.0)           # ε_i = ε_PPO / (i+1)   (heuristic consistent with Lemma 4)
+                else:
+                    eps = (2.0 / (M + 1.0)) * eps_base   # ε_GePPO for uniform ν. :contentReference[oaicite:4]{index=4}
+            else:
+                eps = agent.config.ppo.clipping_ratio
+
+            # OP-PPO baseline: center at 1 (no c shift)
+            if agent.config.ppo.use_op_ppo:
+                c = jnp.ones_like(c)                     # center at 1
+            # clipped ratio around center c
+            r_b_clip = jnp.clip(r_b, c - eps, c + eps)
+
+            #masks = batch["masks"]
             if agent.config.ppo.spo_loss:
-                
-                actor_loss_spo_terms = (1.-outliers)* batch["masks"] * adv * ratio - (jnp.abs(batch["masks"] * adv) / (2 * agent.config.ppo.clipping_ratio)) * (ratio - 1)**2
-                actor_loss = -actor_loss_spo_terms.mean()
-            
-            else :
-                ### Use standard PPO loss            
-                actor_loss1 = masks*adv * ratio
-                actor_loss2 = masks*adv * jnp.clip(ratio, 1 - clip_coef, 1 + clip_coef)
-                actor_loss = -jnp.minimum(actor_loss1,actor_loss2).mean()
-                    
-            ### Pad Q and logits because actor buffer is padded ###
-            logp = masks * new_logp
-            
-            entropy = -1 * (masks*logp).sum()/(masks.sum())
-            
+                # Centered SPO: r_b A − |A|/(2ε) * (r_b − c)^2  (GePPO-centered). :contentReference[oaicite:5]{index=5}
+                dev = r_b - c
+                #spo = masks * (r_b * adv) - (jnp.abs(masks * adv) / (2.0 * eps)) * (dev ** 2)
+                #actor_loss = -spo.mean()
+                spo = (r_b * adv) - (jnp.abs(adv) / (2.0 * eps)) * (dev ** 2)
+                actor_loss = -wmean(spo)
+            else:
+                # GePPO-centered PPO-Clip objective. :contentReference[oaicite:6]{index=6}
+                obj1 =  adv * r_b
+                obj2 = adv * r_b_clip
+                actor_loss = -wmean(jnp.minimum(obj1, obj2))
+
+            #approx_kl = ((r_b - 1.0) - log_r_b).mean()  # same diagnostic as PPO
+            #percent_out = jnp.mean(jnp.abs(r_b - c) > 2.0 * eps)
+            #entropy = -1.0 * (masks * new_logp).sum() / (masks.sum())
+
+            approx_kl = wmean((r_b - 1.0) - log_r_b)  # PPO diagnostic
+            percent_out = wmean((jnp.abs(r_b - c) > 2.0 * eps).astype(jnp.float32))
+            # Entropy under π_new (analytic if available)
+            if agent.config.training.tanh_squash_actions and not agent.config.training.tanh_squash_distribution:
+                # MC entropy of squashed policy
+                K = 4
+                keys = jax.random.split(curr_key, K)
+                def one(key):
+                    pre_a, pre_lp = dist_new.sample_and_log_prob(seed=key)
+                    lp = pre_lp - jnp.sum(2*(jnp.log(2)-pre_a - jax.nn.softplus(-2*pre_a)), axis=-1)
+                    return -lp
+                ent_mc = jnp.stack([one(k) for k in keys], axis=0).mean(0)
+                entropy = wmean(ent_mc)
+            else:
+                entropy = wmean(dist_new.entropy())
+
             return actor_loss, {
                 'actor_loss': actor_loss,
                 'entropy': entropy,
-                'approx_kl':approx_kl,
-                'max_ratio':jnp.max(ratio),
-                'min_ratio':jnp.min(ratio),
-                'percent_outliers': jnp.mean((ratio > 1 + 2 * clip_coef) | (ratio < 1 - 2 * clip_coef)),
-              
+                'approx_kl': approx_kl,
+                'max_ratio': jnp.max(r_b),
+                'min_ratio': jnp.min(r_b),
+                'percent_outliers': percent_out,
+                # TV estimate for adaptive LR: TV = 0.5 * E|r_b - c|. :contentReference[oaicite:7]{index=7}
+                'tv_hat': 0.5 * wmean(jnp.abs(r_b - c)),
             }
+
             
         
         def temp_loss_fn(temp_params, entropy, target_entropy):
@@ -399,9 +437,11 @@ class SACAgent(flax.struct.PyTreeNode):
             
         new_rng, curr_key, next_key = jax.random.split(agent.rng, 3)
 
-        observations,next_observations = batch["observations"],batch["next_observations"]
+        #observations,next_observations = batch["observations"],batch["next_observations"]
         
-        observations = jnp.concatenate([observations, next_observations[-1][None]], axis=0)
+        #observations = jnp.concatenate([observations, next_observations[-1][None]], axis=0)
+        
+        observations,next_observations = batch["observations"],batch["next_observations"]
         
         def evaluate(observations,key):
             
@@ -445,7 +485,7 @@ class SACAgent(flax.struct.PyTreeNode):
 
         info = {**actor_info, **temp_info}  
     
-        return agent,info
+        return agent.replace(rng=new_rng), info
                     
                     
 
@@ -581,6 +621,7 @@ def create_learner(
         temp=temp,
         old_temp_params=temp_params,
         config=config,
+        policy_version=0
     )
 
 
