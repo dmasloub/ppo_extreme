@@ -459,9 +459,9 @@ class SACAgent(flax.struct.PyTreeNode):
         q = agent.critic.apply_fn({'params': agent.critic.params}, batch["observations"], batch["actions"]).mean(axis=0)
         
         
-        dist = agent.actor.apply_fn({'params': agent.old_actor_params}, batch["observations"])
+        dist_cur = agent.actor.apply_fn({'params': agent.old_actor_params}, batch["observations"])
         pre_actions = batch["pre_actions"]
-        pre_log_probs = dist.log_prob(pre_actions)
+        pre_log_probs = dist_cur.log_prob(pre_actions)
         
         if agent.config.training.tanh_squash_actions:
             logp = pre_log_probs - jnp.sum(2 * (jnp.log(2) - pre_actions - jax.nn.softplus(-2 * pre_actions)), axis=-1)
