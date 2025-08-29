@@ -60,7 +60,7 @@ parser.add_argument('--num_critics',type=int,default=2)
 parser.add_argument('--hidden_dims',type=int,default=256) 
 parser.add_argument('--momentum',type=float,default=0.9) 
 parser.add_argument('--b2',type=float,default=0.999) 
-parser.add_argument('--temperature',type=float,default=1.) 
+parser.add_argument('--temperature',type=float,default=0.01) 
 
 
 parser.add_argument('--on_policy_critic',type=str2bool,default=False)
@@ -71,12 +71,12 @@ parser.add_argument('--use_layer_norm',type=str2bool,default=True)
 parser.add_argument('--clipping_ratio',type=float,default=0.25) 
 parser.add_argument('--gae_lambda',type=float,default=0.) 
 
-parser.add_argument('--decouple_prox', type=str2bool, default=True)   
+parser.add_argument('--decouple_prox', type=str2bool, default=False)   
 parser.add_argument('--ema_decay', type=float, default=0.995)
 
-parser.add_argument('--use_is_weights', type=str2bool, default=True)
+parser.add_argument('--use_is_weights', type=str2bool, default=False)
 parser.add_argument('--is_cmax', type=float, default=10.0)
-parser.add_argument('--replay_horizon', type=int, default=50000)
+parser.add_argument('--replay_horizon', type=int, default=50_000)
 
 parser.add_argument('--episode_based',type=str2bool,default=False) 
 parser.add_argument('--buffer_size',type=int,default=50_000) 
@@ -85,7 +85,7 @@ parser.add_argument('--num_epochs',type=int,default=25)
 parser.add_argument('--activation_fn',type=str,default='silu')
 parser.add_argument('--stable_scheme',type=str2bool,default=True)
 parser.add_argument('--bound_actions',type=str2bool,default=True)
-parser.add_argument('--optimizer',type=str,default='sgd', choices=['adam', 'sgd'])
+parser.add_argument('--optimizer',type=str,default='adam', choices=['adam', 'sgd'])
 parser.add_argument('--spo_loss',type=str2bool,default=True)
 
 args = parser.parse_args()

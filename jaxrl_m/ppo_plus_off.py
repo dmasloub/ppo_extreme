@@ -297,8 +297,8 @@ class SACAgent(flax.struct.PyTreeNode):
                     max_ratio=r_ref.max(),
                     min_ratio=r_ref.min(),
                     percent_outliers=outliers.mean(),
-                    is_w_mean=w.mean(),
-                    is_w_max=w.max()
+                    is_w_mean=w if isinstance(w, float) else w.mean(),
+                    is_w_max=w if isinstance(w, float) else w.max()
                 )
 
             else:  
