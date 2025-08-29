@@ -31,7 +31,7 @@ import random
 
 
 # Set env variables
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -48,9 +48,9 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument('--seed',type=int,default=21) 
 
-parser.add_argument('--algo_name', type=str, default='superppo', help='the name of the RL algorithm')
-parser.add_argument('--project_name',type=str,default="single_exp_off") 
-parser.add_argument('--env_name',type=str,default="Ant-v5") 
+parser.add_argument('--algo_name', type=str, default='op-ppo', help='the name of the RL algorithm')
+parser.add_argument('--project_name',type=str,default="random_tests") 
+parser.add_argument('--env_name',type=str,default="Walker2d-v5") 
 parser.add_argument('--max_steps',type=int,default=None) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
 parser.add_argument('--gamma',type=float,default=0.99)
@@ -60,7 +60,7 @@ parser.add_argument('--num_critics',type=int,default=2)
 parser.add_argument('--hidden_dims',type=int,default=256) 
 parser.add_argument('--momentum',type=float,default=0.9) 
 parser.add_argument('--b2',type=float,default=0.999) 
-parser.add_argument('--temperature',type=float,default=1.) 
+parser.add_argument('--temperature',type=float,default=0.01) 
 
 
 parser.add_argument('--on_policy_critic',type=str2bool,default=False)
@@ -71,6 +71,13 @@ parser.add_argument('--use_layer_norm',type=str2bool,default=True)
 parser.add_argument('--clipping_ratio',type=float,default=0.25) 
 parser.add_argument('--gae_lambda',type=float,default=0.) 
 
+parser.add_argument('--decouple_prox', type=str2bool, default=False)   
+parser.add_argument('--ema_decay', type=float, default=0.995)
+
+parser.add_argument('--use_is_weights', type=str2bool, default=False)
+parser.add_argument('--is_cmax', type=float, default=10.0)
+parser.add_argument('--replay_horizon', type=int, default=50_000)
+
 parser.add_argument('--episode_based',type=str2bool,default=False) 
 parser.add_argument('--buffer_size',type=int,default=50_000) 
 parser.add_argument('--policy_steps',type=int,default=5000) 
@@ -78,7 +85,7 @@ parser.add_argument('--num_epochs',type=int,default=25)
 parser.add_argument('--activation_fn',type=str,default='silu')
 parser.add_argument('--stable_scheme',type=str2bool,default=True)
 parser.add_argument('--bound_actions',type=str2bool,default=True)
-parser.add_argument('--optimizer',type=str,default='sgd', choices=['adam', 'sgd'])
+parser.add_argument('--optimizer',type=str,default='adam', choices=['adam', 'sgd'])
 parser.add_argument('--spo_loss',type=str2bool,default=True)
 
 args = parser.parse_args()
@@ -91,7 +98,7 @@ random.seed(args.seed)
 np.random.seed(args.seed)
 jax_rng = jax.random.PRNGKey(args.seed)
 jax.config.update("jax_default_matmul_precision", "highest")
-
+#6d9aeda8022ca922a2ee74ddfe8ea3d0e1f170db
 def train(args):
     
     
@@ -105,7 +112,7 @@ def train(args):
 
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name':f"{args.algo_name}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
@@ -182,7 +189,10 @@ def train(args):
                     critic_update_info = {}
                 
                 update_info = {**critic_update_info, **actor_update_info}
-                agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),old_temp_params=deepcopy(agent.temp.params))
+                if agent.config.ppo.decouple_prox:
+                    agent = agent.replace(old_temp_params=deepcopy(agent.temp.params))
+                else:
+                    agent = agent.replace(old_temp_params=deepcopy(agent.temp.params), prox_actor_params=deepcopy(agent.actor.params))
                 n_grads += args.num_epochs * 2  # epochs for critics + epochs for actor
                 
                 ### Log training info ###

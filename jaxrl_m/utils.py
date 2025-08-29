@@ -73,3 +73,18 @@ def get_max_steps_for_env(env_name):
         return 200_000
     else:
         return 1_000_000  # default
+
+
+def logp_from_pre_actions(apply_fn, params, obs, pre_a, tanh_squash=True):
+    dist = apply_fn({'params': params}, obs)
+    pre_log = dist.log_prob(pre_a)
+    if tanh_squash:
+        corr = jnp.sum(2 * (jnp.log(2.) - pre_a - jax.nn.softplus(-2. * pre_a)), axis=-1)
+        return pre_log - corr
+    return pre_log
+
+def get_recent(transitions, K):
+    n = transitions['observations'].shape[0]
+    sl = slice(max(0, n-K), n)
+    return jax.tree.map(lambda x: x[sl], transitions)
+
