@@ -50,7 +50,7 @@ parser.add_argument('--seed',type=int,default=21)
 
 parser.add_argument('--algo_name', type=str, default='op-ppo', help='the name of the RL algorithm')
 parser.add_argument('--project_name',type=str,default="random_tests") 
-parser.add_argument('--env_name',type=str,default="Ant-v5") 
+parser.add_argument('--env_name',type=str,default="Walker2d-v5") 
 parser.add_argument('--max_steps',type=int,default=None) 
 parser.add_argument('--max_episode_steps',type=int,default=1000) 
 parser.add_argument('--gamma',type=float,default=0.99)
@@ -70,6 +70,13 @@ parser.add_argument('--use_layer_norm',type=str2bool,default=True)
 
 parser.add_argument('--clipping_ratio',type=float,default=0.25) 
 parser.add_argument('--gae_lambda',type=float,default=0.) 
+
+parser.add_argument('--decouple_prox', type=str2bool, default=True)   
+parser.add_argument('--ema_decay', type=float, default=0.995)
+
+parser.add_argument('--use_is_weights', type=str2bool, default=True)
+parser.add_argument('--is_cmax', type=float, default=10.0)
+parser.add_argument('--replay_horizon', type=int, default=50000)
 
 parser.add_argument('--episode_based',type=str2bool,default=False) 
 parser.add_argument('--buffer_size',type=int,default=50_000) 
@@ -182,7 +189,10 @@ def train(args):
                     critic_update_info = {}
                 
                 update_info = {**critic_update_info, **actor_update_info}
-                agent = agent.replace(old_actor_params=deepcopy(agent.actor.params),old_temp_params=deepcopy(agent.temp.params))
+                if agent.config.ppo.decouple_prox:
+                    agent = agent.replace(old_temp_params=deepcopy(agent.temp.params))
+                else:
+                    agent = agent.replace(old_temp_params=deepcopy(agent.temp.params), prox_actor_params=deepcopy(agent.actor.params))
                 n_grads += args.num_epochs * 2  # epochs for critics + epochs for actor
                 
                 ### Log training info ###

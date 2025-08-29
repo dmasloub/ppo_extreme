@@ -50,11 +50,12 @@ class PPOConfig:
     temperature: float = 1.0
     store_grads: bool = False
     target_entropy: Optional[float] = None
-    spo_loss: bool = False
+    spo_loss: bool = True
     use_is_weights: bool = True
     is_cmax: float = 10.0 
-    opppo_objective: str = "spo_is"
     replay_horizon: int = 50000
+    ema_decay: float = 0.995
+    decouple_prox: bool = True
 
 @dataclass
 class TrainingConfig:
@@ -98,6 +99,11 @@ class SuperPPOConfig:
                 entropy_coeff=args.entropy_coeff,
                 temperature=args.temperature,
                 spo_loss=args.spo_loss,
+                use_is_weights=args.use_is_weights,
+                is_cmax=args.is_cmax,
+                replay_horizon=args.replay_horizon,
+                ema_decay=args.ema_decay,
+                decouple_prox=args.decouple_prox,
             ),
             training=TrainingConfig(
                 seed=args.seed,
@@ -142,7 +148,7 @@ class SACAgent(flax.struct.PyTreeNode):
     rng: PRNGKey
     critic: TrainState
     actor: TrainState
-    old_actor_params: jnp.ndarray
+    prox_actor_params: jnp.ndarray
     temp: TrainState
     old_temp_params : jnp.ndarray
     config: dict = flax_field(pytree_node=False)
@@ -194,7 +200,8 @@ class SACAgent(flax.struct.PyTreeNode):
     @jax.jit
     def update_critics_seq(agent,transitions,num_updates=0 ):
                 
-        n_batches = transitions['observations'].shape[0]//250
+        n = transitions['observations'].shape[0]
+        n_batches = max(1, n // 250)
 
         indexes = jnp.arange(transitions['observations'].shape[0])
         indexes = jax.random.permutation(agent.rng, indexes)
@@ -221,7 +228,9 @@ class SACAgent(flax.struct.PyTreeNode):
         if agent.config.ppo.replay_horizon:
             transitions = get_recent(transitions, agent.config.ppo.replay_horizon)
         
-        n_batches = transitions['observations'].shape[0]//250
+        n = transitions['observations'].shape[0]
+        n_batches = max(1, n // 250)
+        
         idxs = jnp.arange(transitions['observations'].shape[0])
         idxs = jax.random.permutation(agent.rng, idxs)
         batch_size = idxs.shape[0] // n_batches
@@ -257,7 +266,7 @@ class SACAgent(flax.struct.PyTreeNode):
             logp_new = logp_from_pre_actions(agent.actor.apply_fn, actor_params,
                                             batch["observations"], batch["pre_actions"],
                                             tanh_squash=agent.config.training.tanh_squash_actions)
-            logp_ref = logp_from_pre_actions(agent.actor.apply_fn, agent.old_actor_params,
+            logp_ref = logp_from_pre_actions(agent.actor.apply_fn, agent.prox_actor_params,
                                             batch["observations"], batch["pre_actions"],
                                             tanh_squash=agent.config.training.tanh_squash_actions)
             logp_mu  = batch["log_probs"]
@@ -275,7 +284,7 @@ class SACAgent(flax.struct.PyTreeNode):
             eps = agent.config.ppo.clipping_ratio
             outliers = (r_ref > 1.0 + 2.0*eps) | (r_ref < 1.0 - 2.0*eps)
 
-            if agent.config.ppo.opppo_objective == "spo_is":
+            if agent.config.ppo.spo_loss:
                 core = (1.0 - outliers) * masks * adv * r_ref \
                     - (jnp.abs(masks * adv) / (2.0 * eps)) * (r_ref - 1.0)**2
                 loss = - (w * core).mean()
@@ -307,7 +316,7 @@ class SACAgent(flax.struct.PyTreeNode):
                 approx_kl = ((r_mu - 1.0) - (logp_new - logp_mu)).mean()
 
                 w_mu = jnp.exp(logp_mu - logp_mu) 
-                ess = (w.sum()**2) / (jnp.sum(w**2) + 1e-8)
+                ess = (w_mu.sum()**2) / (jnp.sum(w_mu**2) + 1e-8)
 
                 metrics = dict(
                     actor_loss=loss,
@@ -383,12 +392,12 @@ class SACAgent(flax.struct.PyTreeNode):
 
         ### Compute advantage for the fixed states AND actions
         keys = jax.random.split(curr_key, 10)
-        vs, hs = jax.vmap(lambda k: evaluate(batch["observations"], k, agent.old_actor_params))(keys)     
+        vs, hs = jax.vmap(lambda k: evaluate(batch["observations"], k, agent.prox_actor_params))(keys)     
         tmp_v,tmp_logp = jnp.mean(vs,axis=0),jnp.mean(hs,axis=0)
         q = agent.critic.apply_fn({'params': agent.critic.params}, batch["observations"], batch["actions"]).mean(axis=0)
         
         
-        dist = agent.actor.apply_fn({'params': agent.old_actor_params}, batch["observations"])
+        dist = agent.actor.apply_fn({'params': agent.prox_actor_params}, batch["observations"])
         pre_actions = batch["pre_actions"]
         pre_log_probs = dist.log_prob(pre_actions)
         
@@ -410,6 +419,15 @@ class SACAgent(flax.struct.PyTreeNode):
 
         grads, actor_info = jax.grad(loss_fn, has_aux=True)(agent.actor.params)
         new_actor = agent.actor.apply_gradients(grads=grads)
+        
+        
+        if agent.config.ppo.decouple_prox: 
+            beta = agent.config.ppo.ema_decay
+            new_prox = jax.tree.map(lambda p_old, p_new: beta*p_old + (1.0 - beta)*p_new,
+                            agent.prox_actor_params, new_actor.params) 
+            agent = agent.replace(actor=new_actor, prox_actor_params=new_prox)
+        else: 
+            agent = agent.replace(actor=new_actor)
         
         _, logp_samp, _ = agent.sample_actions(
             batch["observations"],
@@ -558,7 +576,7 @@ def create_learner(
         rng,
         critic=critic,
         actor=actor,
-        old_actor_params=actor_params,
+        prox_actor_params=actor_params,
         temp=temp,
         old_temp_params=temp_params,
         config=config,

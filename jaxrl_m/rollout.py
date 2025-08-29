@@ -23,7 +23,7 @@ def rollout_policy(agent,env,exploration_rng,
             log_p,pre_action = 0.,action
         else:
             exploration_rng, key = jax.random.split(exploration_rng)
-            action,log_p,pre_action = agent.sample_actions(obs,seed=exploration_rng)
+            action,log_p,pre_action = agent.sample_actions(obs,seed=key)
             
         action = np.array(action)
         next_obs, reward, done, truncated, info = env.step(action)
@@ -85,7 +85,7 @@ def rollout_policy2(agent,env,exploration_rng,
             log_p,pre_action = 0.,action
         else:
             exploration_rng, key = jax.random.split(exploration_rng)
-            action,log_p,pre_action = agent.sample_actions(obs,seed=exploration_rng)
+            action,log_p,pre_action = agent.sample_actions(obs,seed=key)
             
         action = np.array(action)
         next_obs, reward, done, truncated, info = env.step(action)
