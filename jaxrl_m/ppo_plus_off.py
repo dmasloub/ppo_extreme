@@ -297,13 +297,14 @@ class SACAgent(flax.struct.PyTreeNode):
                     max_ratio=r_ref.max(),
                     min_ratio=r_ref.min(),
                     percent_outliers=outliers.mean(),
+                    entropy=entropy_est,
                     is_w_mean=w if isinstance(w, float) else w.mean(),
                     is_w_max=w if isinstance(w, float) else w.max()
                 )
 
             else:  
                 r_mu  = jnp.exp(logp_new - logp_mu)
-                scale = jnp.exp(logp_ref - logp_mu)
+                scale = w
                 low   = scale * (1.0 - eps)
                 high  = scale * (1.0 + eps)
 
@@ -323,9 +324,8 @@ class SACAgent(flax.struct.PyTreeNode):
                     approx_kl=approx_kl,
                     r_mu_max=r_mu.max(),
                     r_mu_min=r_mu.min(),
-                    low_mean=low.mean(),
-                    high_mean=high.mean(),
-                    is_w_mean=w.mean(),
+                    low_mean=low,
+                    high_mean=high,
                     ess=ess, 
                     entropy=entropy_est,
                 )
