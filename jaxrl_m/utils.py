@@ -37,7 +37,7 @@ def create_environments(env_name):
     """
     
     
-    gym_envs = ["InvertedDoublePendulum-v5","Walker2d-v5","HalfCheetah-v5","Hopper-v5","Ant-v5","Humanoid-v5"]
+    gym_envs = ["InvertedDoublePendulum-v5","Walker2d-v5","HalfCheetah-v5","Hopper-v5","Ant-v5","Humanoid-v5", "HumanoidStandup-v5"]
     
         # Gymnasium environments  
     if env_name in gym_envs:
