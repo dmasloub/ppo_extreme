@@ -271,16 +271,15 @@ class SACAgent(flax.struct.PyTreeNode):
                                             tanh_squash=agent.config.training.tanh_squash_actions)
             logp_mu  = batch["log_probs"]
 
-            dlogp = jnp.clip(logp_new - logp_ref, -10.0, 10.0)
+            #dlogp = jnp.clip(logp_new - logp_ref, -10.0, 10.0)
             
-            r_ref = jnp.exp(dlogp)         
+            r_ref = jnp.exp(logp_new - logp_ref)         
             masks = batch["masks"]
             entropy_est = - jnp.sum(masks * logp_new) / (jnp.sum(masks) + 1e-8)
 
             
             if agent.config.ppo.use_is_weights:
-                w = jnp.minimum(jnp.exp(jnp.clip(logp_ref - logp_mu, -10.0, 10.0)),
-                    agent.config.ppo.is_cmax)
+                w = jnp.minimum(jnp.exp(logp_ref - logp_mu), agent.config.ppo.is_cmax)
             else:
                 w = 1.0
             w = jax.lax.stop_gradient(w)
@@ -433,7 +432,7 @@ class SACAgent(flax.struct.PyTreeNode):
             return loss, mets
 
         grads, actor_info = jax.grad(loss_fn, has_aux=True)(agent.actor.params)
-        grads = jax.tree.map(lambda g: jnp.where(jnp.isfinite(g), g, 0.0), grads)
+        #grads = jax.tree.map(lambda g: jnp.where(jnp.isfinite(g), g, 0.0), grads)
         new_actor = agent.actor.apply_gradients(grads=grads)
         
         
