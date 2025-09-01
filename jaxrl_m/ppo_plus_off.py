@@ -271,32 +271,43 @@ class SACAgent(flax.struct.PyTreeNode):
                                             tanh_squash=agent.config.training.tanh_squash_actions)
             logp_mu  = batch["log_probs"]
 
-            r_ref = jnp.exp(logp_new - logp_ref)         
+            dlogp = jnp.clip(logp_new - logp_ref, -10.0, 10.0)
+            
+            r_ref = jnp.exp(dlogp)         
             masks = batch["masks"]
             entropy_est = - jnp.sum(masks * logp_new) / (jnp.sum(masks) + 1e-8)
 
             
             if agent.config.ppo.use_is_weights:
-                w = jnp.minimum(jnp.exp(logp_ref - logp_mu), agent.config.ppo.is_cmax)
+                w = jnp.minimum(jnp.exp(jnp.clip(logp_ref - logp_mu, -10.0, 10.0)),
+                    agent.config.ppo.is_cmax)
             else:
                 w = 1.0
-
+            w = jax.lax.stop_gradient(w)
+            
+            
             eps = agent.config.ppo.clipping_ratio
-            outliers = (r_ref > 1.0 + 2.0*eps) | (r_ref < 1.0 - 2.0*eps)
+            #outliers = (r_ref > 1.0 + 2.0*eps) | (r_ref < 1.0 - 2.0*eps)
 
             if agent.config.ppo.spo_loss:
-                core = (1.0 - outliers) * masks * adv * r_ref \
-                    - (jnp.abs(masks * adv) / (2.0 * eps)) * (r_ref - 1.0)**2
-                loss = - (w * core).mean()
+                #core = (1.0 - outliers) * masks * adv * r_ref \
+                #    - (jnp.abs(masks * adv) / (2.0 * eps)) * (r_ref - 1.0)**2
+                #loss = - (w * core).mean()
 
+                
+                delta = jnp.maximum(jnp.abs(r_ref - 1.0) - eps, 0.0)
+                penalty = (jnp.abs(adv) / (2.0 * eps)) * (delta ** 2)
+                core = adv * r_ref - penalty
+                loss = - (masks * w * core).mean()
+                
                 approx_kl = ((r_ref - 1.0) - (logp_new - logp_ref)).mean()
-
+                
                 metrics = dict(
                     actor_loss=loss,
                     approx_kl=approx_kl,
                     max_ratio=r_ref.max(),
                     min_ratio=r_ref.min(),
-                    percent_outliers=outliers.mean(),
+                    frac_active=(jnp.mean((jnp.abs(r_ref - 1.0) <= eps).astype(jnp.float32))),
                     entropy=entropy_est,
                     is_w_mean=w if isinstance(w, float) else w.mean(),
                     is_w_max=w if isinstance(w, float) else w.max()
@@ -407,7 +418,11 @@ class SACAgent(flax.struct.PyTreeNode):
         logp = jax.lax.stop_gradient(logp)
         
         
-        adv = (q-agent.temp.apply_fn({'params': agent.temp.params})*logp) - (tmp_v - agent.temp.apply_fn({'params': agent.temp.params}) *tmp_logp)### This one worked
+        #adv = (q-agent.temp.apply_fn({'params': agent.temp.params})*logp) - (tmp_v - agent.temp.apply_fn({'params': agent.temp.params}) *tmp_logp)### This one worked
+        alpha_old = agent.temp.apply_fn({'params': agent.old_temp_params})
+        adv = (q - alpha_old * logp) - (tmp_v - alpha_old * tmp_logp)
+        adv = jax.lax.stop_gradient(adv)
+        
         adv = adv.reshape(-1)
         # Normalize advantages
         #adv = (adv - jnp.mean(adv)) / (jnp.std(adv) + 1e-8)
@@ -418,6 +433,7 @@ class SACAgent(flax.struct.PyTreeNode):
             return loss, mets
 
         grads, actor_info = jax.grad(loss_fn, has_aux=True)(agent.actor.params)
+        grads = jax.tree.map(lambda g: jnp.where(jnp.isfinite(g), g, 0.0), grads)
         new_actor = agent.actor.apply_gradients(grads=grads)
         
         
