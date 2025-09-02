@@ -188,14 +188,14 @@ class Policy(nn.Module):
 
         log_stds = jnp.clip(log_stds, self.log_std_min, self.log_std_max)
 
-        distribution = distrax.MultivariateNormalDiag(
+        base = distrax.MultivariateNormalDiag(
             loc=means, scale_diag=jnp.exp(log_stds) * temperature
         )
-        
-            
         if self.tanh_squash_distribution:
-            
-            distribution = distrax.Transformed(distribution, distrax.Tanh())
+            bij = distrax.Block(distrax.Tanh(), ndims=1)
+            distribution = TransformedWithMode(base, bij) 
+        else:
+            distribution = base
 
         return distribution
 

@@ -30,7 +30,7 @@ import wandb
 import random
 
 
-os.environ["WANDB_API_KEY"]="28996bd59f1ba2c5a8c3f2cc23d8673c327ae230"
+os.environ["WANDB_API_KEY"]="7a792f0991f824c320035120180ba48920981e67"
 os.environ["WANDB__SERVICE_WAIT"] = str(1800)
 os.environ['PYTHONHASHSEED'] = '1'
 os.environ['TF_CUDNN_DETERMINISTIC'] = '1'
@@ -41,7 +41,7 @@ os.environ['XLA_FLAGS']='--xla_gpu_deterministic_ops=true'
 parser = argparse.ArgumentParser()
 
 parser.add_argument('--seed',type=int,default=21) 
-parser.add_argument('--project_name', type=str, default='sac_benchmark2', help='Name of the wandb project to log to')
+parser.add_argument('--project_name', type=str, default='IP-Report', help='Name of the wandb project to log to')
 parser.add_argument('--env_name', type=str, default='Walker2d-v5', help='Name of the gym environment to use')
 parser.add_argument('--gamma', type=float, default=0.99, help='Discount factor')
 parser.add_argument('--algo_name', type=str, default="sac")
@@ -154,16 +154,10 @@ class SACAgent(flax.struct.PyTreeNode):
     
       
     @jax.jit
-    def deterministic_action(agent,   
-                       observations: np.ndarray,
-                       ) -> jnp.ndarray:
-        
-        ### random always true
-        seed = jax.random.PRNGKey(0)
-        dist = agent.actor(observations, temperature=0.)
-        actions,pre_log_ps = dist.sample_and_log_prob(seed=seed)
-       
-        return actions
+    def deterministic_action(agent, observations):
+        dist = agent.actor(observations, temperature=1.0)
+        return dist.mode()
+
 
 
 
@@ -230,7 +224,7 @@ def train():
  
     wandb_config = {
         'project': args.project_name,
-        'name':None,
+        'name':f"{args.algo_name}_{args.env_name}_{args.seed}",
         'hyperparam_dict':args.__dict__,
         }
     wandb_run = setup_wandb(**wandb_config)
